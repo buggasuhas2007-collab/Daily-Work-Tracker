@@ -2,38 +2,43 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Plus, Calendar as CalIcon, LayoutGrid, CheckCircle2, Search as SearchIcon,
   BarChart3, ChevronDown, ChevronRight, Paperclip, X, Trash2, Clock,
-  Check, Circle, PauseCircle, Loader2, FileText, Menu, Download, Upload
+  Check, Circle, PauseCircle, Loader2, FileText, Menu, Download, Upload,
+  Flame, User, Edit2
 } from "lucide-react";
 
-/* ── keys ── */
+/* ── storage keys ── */
 const K_TASKS = "ft:tasks:v1";
+const K_NAME = "ft:username:v1";
 
-/* ── palette: ink + graphite + a single signal amber ── */
+/* ── premium palette: slate base + glowing neon details ── */
 const C = {
-  bg: "#0E0F12",
-  panel: "#16181D",
-  panel2: "#1C1F26",
-  line: "#282C35",
-  line2: "#343946",
-  txt: "#E8E9EC",
-  dim: "#9095A1",
-  dim2: "#646A78",
-  amber: "#E8A33D",
-  amberDim: "#8A6224",
-  green: "#4FA97A",
-  red: "#D2564B",
-  blue: "#5B87C9",
+  bg: "#07080B",
+  panel: "rgba(17, 20, 28, 0.7)",      // glass panel
+  panelElevated: "rgba(28, 33, 46, 0.85)",
+  border: "rgba(255, 255, 255, 0.06)",
+  borderActive: "rgba(255, 172, 51, 0.25)",
+  txt: "#F3F4F6",
+  dim: "#9CA3AF",
+  dim2: "#4B5563",
+  amber: "#F59E0B",
+  amberGlow: "rgba(245, 158, 11, 0.15)",
+  green: "#10B981",
+  greenGlow: "rgba(16, 185, 129, 0.15)",
+  red: "#EF4444",
+  redGlow: "rgba(239, 68, 68, 0.15)",
+  blue: "#3B82F6",
+  blueGlow: "rgba(59, 130, 246, 0.15)",
 };
 
 const PRIORITIES = {
   critical: { label: "Critical", c: C.red },
   high: { label: "High", c: C.amber },
   medium: { label: "Medium", c: C.blue },
-  low: { label: "Low", c: C.dim2 },
+  low: { label: "Low", c: C.dim },
 };
 
 const STATUSES = {
-  not_started: { label: "Not started", c: C.dim2, Icon: Circle },
+  not_started: { label: "Not started", c: C.dim, Icon: Circle },
   in_progress: { label: "In progress", c: C.amber, Icon: Loader2 },
   blocked: { label: "Blocked", c: C.red, Icon: PauseCircle },
   completed: { label: "Completed", c: C.green, Icon: CheckCircle2 },
@@ -43,6 +48,7 @@ const TAGS = ["AI", "Coding", "College", "Research", "Placement", "Reading", "Pe
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const uid = () => Math.random().toString(36).slice(2, 10);
+
 const fmtDate = (iso) =>
   new Date(iso + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 const fmtShort = (iso) =>
@@ -74,17 +80,232 @@ async function saveTasks(tasks) {
   }
 }
 
-/* ── small pieces ── */
+/* ── focus streak helper ── */
+function calculateStreak(tasks) {
+  const completedDates = new Set(
+    tasks
+      .filter((t) => t.status === "completed" && t.completedDate)
+      .map((t) => t.completedDate)
+  );
+  if (completedDates.size === 0) return 0;
+
+  const today = todayISO();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayISO = yesterday.toISOString().slice(0, 10);
+
+  let currentStreak = 0;
+  let checkDate = new Date();
+
+  if (completedDates.has(today)) {
+    // Streak active checking starting today
+  } else if (completedDates.has(yesterdayISO)) {
+    // Streak active checking starting yesterday
+    checkDate.setDate(checkDate.getDate() - 1);
+  } else {
+    return 0; // Streak broken
+  }
+
+  while (true) {
+    const isoString = checkDate.toISOString().slice(0, 10);
+    if (completedDates.has(isoString)) {
+      currentStreak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+  return currentStreak;
+}
+
+/* ── custom SVG line chart for productivity trend ── */
+function SVGLinesChart({ data, color = C.amber, label = "Completed" }) {
+  const width = 500;
+  const height = 150;
+  const paddingX = 35;
+  const paddingY = 25;
+  const chartWidth = width - paddingX * 2;
+  const chartHeight = height - paddingY * 2;
+
+  const maxVal = Math.max(...data.map((d) => d.val), 3); // cap peak to min 3 for scaling aesthetics
+  const points = data.map((d, i) => {
+    const x = paddingX + (i / (data.length - 1)) * chartWidth;
+    const y = height - paddingY - (d.val / maxVal) * chartHeight;
+    return { x, y, label: d.label, val: d.val };
+  });
+
+  let pathD = "";
+  let areaD = "";
+  if (points.length > 0) {
+    pathD = `M ${points[0].x} ${points[0].y}`;
+    areaD = `M ${points[0].x} ${height - paddingY} L ${points[0].x} ${points[0].y}`;
+    for (let i = 1; i < points.length; i++) {
+      pathD += ` L ${points[i].x} ${points[i].y}`;
+      areaD += ` L ${points[i].x} ${points[i].y}`;
+    }
+    areaD += ` L ${points[points.length - 1].x} ${height - paddingY} Z`;
+  }
+
+  const [hoveredIdx, setHoveredIdx] = useState(null);
+
+  return (
+    <div style={{ position: "relative", width: "100%" }}>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", overflow: "visible" }}>
+        <defs>
+          <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.18" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="4" stdDeviation="4" floodColor={color} floodOpacity="0.25" />
+          </filter>
+        </defs>
+
+        {/* Grid lines */}
+        {Array.from({ length: 4 }).map((_, i) => {
+          const y = paddingY + (i / 3) * chartHeight;
+          return (
+            <line key={i} x1={paddingX} y1={y} x2={width - paddingX} y2={y} stroke="rgba(255,255,255,0.04)" strokeDasharray="3 3" />
+          );
+        })}
+
+        {/* Shaded area */}
+        {areaD && <path d={areaD} fill="url(#areaGrad)" />}
+
+        {/* Glowing trend line */}
+        {pathD && <path d={pathD} fill="none" stroke={color} strokeWidth="3" filter="url(#glow)" strokeLinecap="round" strokeLinejoin="round" />}
+
+        {/* Points */}
+        {points.map((p, i) => (
+          <g key={i} onMouseEnter={() => setHoveredIdx(i)} onMouseLeave={() => setHoveredIdx(null)} style={{ cursor: "pointer" }}>
+            <circle cx={p.x} cy={p.y} r={hoveredIdx === i ? 6 : 4} fill={hoveredIdx === i ? color : C.bg} stroke={color} strokeWidth="2" style={{ transition: "r 0.1s ease" }} />
+            <circle cx={p.x} cy={p.y} r="14" fill="transparent" />
+          </g>
+        ))}
+
+        {/* X labels */}
+        {points.map((p, i) => (
+          <text key={i} x={p.x} y={height - 8} fill="rgba(255,255,255,0.25)" fontSize="9" textAnchor="middle" fontFamily="inherit">
+            {p.label}
+          </text>
+        ))}
+
+        {/* Y labels */}
+        {Array.from({ length: 4 }).map((_, i) => {
+          const val = Math.round(maxVal - (i / 3) * maxVal);
+          const y = paddingY + (i / 3) * chartHeight + 3;
+          return (
+            <text key={i} x={paddingX - 10} y={y} fill="rgba(255,255,255,0.25)" fontSize="9" textAnchor="end" fontFamily="inherit" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {val}
+            </text>
+          );
+        })}
+      </svg>
+      {hoveredIdx !== null && (
+        <div style={{
+          position: "absolute",
+          left: `${(points[hoveredIdx].x / width) * 100}%`,
+          top: `${(points[hoveredIdx].y / height) * 100 - 30}%`,
+          transform: "translateX(-50%)",
+          background: C.panelElevated,
+          border: `1px solid ${C.border}`,
+          padding: "5px 9px",
+          borderRadius: 6,
+          fontSize: 11,
+          color: C.txt,
+          pointerEvents: "none",
+          boxShadow: "0 6px 20px rgba(0,0,0,0.6)",
+          whiteSpace: "nowrap",
+          zIndex: 10,
+        }}>
+          <strong>{points[hoveredIdx].val}</strong> {label} ({points[hoveredIdx].label})
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── custom SVG donut chart ── */
+function SVGPieChart({ data }) {
+  const total = data.reduce((sum, d) => sum + d.count, 0);
+  const R = 36;
+  const C_circ = 2 * Math.PI * R; // 226.19
+  let accumulatedPercent = 0;
+
+  return (
+    <div style={{ display: "flex", gap: 24, alignItems: "center", width: "100%", flexWrap: "wrap" }}>
+      <div style={{ position: "relative", width: 96, height: 96, flexShrink: 0 }}>
+        <svg viewBox="0 0 100 100" style={{ transform: "rotate(-90deg)", width: "100%", height: "100%" }}>
+          {total === 0 ? (
+            <circle cx="50" cy="50" r={R} stroke="rgba(255,255,255,0.06)" strokeWidth="8" fill="transparent" />
+          ) : (
+            data.map((item) => {
+              if (item.count === 0) return null;
+              const percent = item.count / total;
+              const rotation = accumulatedPercent * 360;
+              accumulatedPercent += percent;
+
+              return (
+                <circle
+                  key={item.key}
+                  cx="50"
+                  cy="50"
+                  r={R}
+                  stroke={item.color}
+                  strokeWidth="8"
+                  fill="transparent"
+                  strokeDasharray={`${percent * C_circ} ${C_circ}`}
+                  strokeDashoffset={0}
+                  transform={`rotate(${rotation} 50 50)`}
+                  strokeLinecap="round"
+                  style={{ transition: "stroke-dasharray 0.3s ease, transform 0.3s ease" }}
+                />
+              );
+            })
+          )}
+        </svg>
+        <div style={{
+          position: "absolute",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          textAlign: "center",
+        }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.txt, lineHeight: 1.1 }}>{total}</div>
+          <div style={{ fontSize: 8.5, color: C.dim, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 2 }}>Tasks</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gap: 6, flex: 1, minWidth: 140 }}>
+        {data.map((item) => {
+          const pct = total > 0 ? Math.round((item.count / total) * 100) : 0;
+          return (
+            <div key={item.key} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: item.color }} />
+              <span style={{ color: C.dim, flex: 1 }}>{item.label}</span>
+              <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: C.txt }}>
+                {item.count} <span style={{ fontSize: 10, color: C.dim2, fontWeight: 400, marginLeft: 4 }}>({pct}%)</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── basic helper components ── */
 function Pill({ children, color, onClick, active }) {
   return (
     <button
       onClick={onClick}
       style={{
-        background: active ? color + "22" : "transparent",
-        border: `1px solid ${active ? color : C.line2}`,
+        background: active ? color + "1a" : "transparent",
+        border: `1px solid ${active ? color : C.border}`,
         color: active ? color : C.dim,
-        borderRadius: 999, padding: "3px 10px", fontSize: 11.5,
+        borderRadius: 999, padding: "4px 12px", fontSize: 11,
         cursor: onClick ? "pointer" : "default", whiteSpace: "nowrap",
+        transition: "all 0.15s ease",
       }}
     >
       {children}
@@ -94,8 +315,8 @@ function Pill({ children, color, onClick, active }) {
 
 function Bar({ pct, color = C.amber }) {
   return (
-    <div style={{ height: 4, background: C.line, borderRadius: 999, overflow: "hidden" }}>
-      <div style={{ width: `${pct}%`, height: "100%", background: color, transition: "width .35s ease" }} />
+    <div style={{ height: 5, background: "rgba(255,255,255,0.04)", borderRadius: 999, overflow: "hidden" }}>
+      <div style={{ width: `${pct}%`, height: "100%", background: color, transition: "width .3s ease" }} />
     </div>
   );
 }
@@ -103,7 +324,7 @@ function Bar({ pct, color = C.amber }) {
 function Field({ label, children }) {
   return (
     <div>
-      <div style={{ fontSize: 10.5, letterSpacing: ".08em", textTransform: "uppercase", color: C.dim2, marginBottom: 6 }}>
+      <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.dim, marginBottom: 6, fontWeight: 500 }}>
         {label}
       </div>
       {children}
@@ -112,12 +333,19 @@ function Field({ label, children }) {
 }
 
 const inputS = {
-  background: C.bg, border: `1px solid ${C.line2}`, color: C.txt,
-  borderRadius: 8, padding: "8px 10px", fontSize: 13, width: "100%", outline: "none",
+  background: "rgba(255, 255, 255, 0.02)",
+  border: `1px solid ${C.border}`,
+  color: C.txt,
+  borderRadius: 8,
+  padding: "9px 12px",
+  fontSize: 13,
+  width: "100%",
+  outline: "none",
   fontFamily: "inherit",
+  transition: "all 0.2s ease",
 };
 
-/* ── task card ── */
+/* ── upgraded task card with glassmorphism ── */
 function TaskCard({ task, onUpdate, onDelete, onComplete }) {
   const [open, setOpen] = useState(false);
   const fileRef = useRef(null);
@@ -132,42 +360,56 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
   };
 
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+    <div className="task-card" style={{
+      background: C.panel,
+      border: `1px solid ${C.border}`,
+      borderRadius: 12,
+      overflow: "hidden",
+      backdropFilter: "blur(12px)",
+    }}>
       <div
         onClick={() => setOpen(!open)}
-        style={{ padding: "14px 16px", cursor: "pointer", display: "flex", gap: 12, alignItems: "center" }}
+        style={{ padding: "14px 18px", cursor: "pointer", display: "flex", gap: 14, alignItems: "center" }}
       >
-        {open ? <ChevronDown size={15} color={C.dim2} /> : <ChevronRight size={15} color={C.dim2} />}
+        {open ? <ChevronDown size={14} color={C.dim} /> : <ChevronRight size={14} color={C.dim} />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 7, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 14.5, fontWeight: 500, color: C.txt }}>{task.title}</span>
-            <span style={{ fontSize: 11, color: P.c, border: `1px solid ${P.c}55`, borderRadius: 4, padding: "1px 6px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 14.5, fontWeight: 600, color: C.txt }}>{task.title}</span>
+            <span style={{
+              fontSize: 10,
+              fontWeight: 500,
+              color: P.c,
+              background: P.c + "11",
+              border: `1px solid ${P.c}33`,
+              borderRadius: 4,
+              padding: "1px 6px"
+            }}>
               {P.label}
             </span>
             {(task.tags || []).map((t) => (
-              <span key={t} style={{ fontSize: 10.5, color: C.dim2, background: C.panel2, borderRadius: 4, padding: "1px 6px" }}>
+              <span key={t} style={{ fontSize: 10, color: C.dim, background: "rgba(255,255,255,0.04)", borderRadius: 4, padding: "1.5px 7px" }}>
                 {t}
               </span>
             ))}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 11.5, color: C.dim }}>
             {task.start && (
-              <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <Clock size={11} /> {task.start} → {task.end || "—"}
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <Clock size={11} color={C.dim2} /> {task.start} → {task.end || "—"}
               </span>
             )}
-            <span style={{ display: "flex", alignItems: "center", gap: 5, color: S.c }}>
-              <S.Icon size={11} /> {S.label}
+            <span style={{ display: "flex", alignItems: "center", gap: 4, color: S.c }}>
+              <S.Icon size={11} className={task.status === "in_progress" ? "anim-rotate" : ""} /> {S.label}
             </span>
             {(task.files || []).length > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <Paperclip size={11} /> {task.files.length}
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <Paperclip size={11} color={C.dim2} /> {(task.files || []).length}
               </span>
             )}
           </div>
         </div>
         <div style={{ width: 84, textAlign: "right" }}>
-          <div style={{ fontSize: 12, color: C.dim, marginBottom: 5, fontVariantNumeric: "tabular-nums" }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: C.txt, marginBottom: 5, fontVariantNumeric: "tabular-nums" }}>
             {task.progress}%
           </div>
           <Bar pct={task.progress} color={task.status === "blocked" ? C.red : C.amber} />
@@ -175,7 +417,7 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
       </div>
 
       {open && (
-        <div style={{ borderTop: `1px solid ${C.line}`, padding: 16, display: "grid", gap: 16 }}>
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: 18, display: "grid", gap: 16, background: "rgba(0,0,0,0.1)" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 12 }}>
             <Field label="Start">
               <input type="time" style={inputS} value={task.start || ""}
@@ -189,7 +431,7 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
               <select style={inputS} value={task.status}
                 onChange={(e) => onUpdate({ ...task, status: e.target.value })}>
                 {Object.entries(STATUSES).filter(([k]) => k !== "completed").map(([k, v]) => (
-                  <option key={k} value={k} style={{ background: C.panel }}>{v.label}</option>
+                  <option key={k} value={k} style={{ background: "#11141C" }}>{v.label}</option>
                 ))}
               </select>
             </Field>
@@ -197,7 +439,7 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
               <select style={inputS} value={task.priority}
                 onChange={(e) => onUpdate({ ...task, priority: e.target.value })}>
                 {Object.entries(PRIORITIES).map(([k, v]) => (
-                  <option key={k} value={k} style={{ background: C.panel }}>{v.label}</option>
+                  <option key={k} value={k} style={{ background: "#11141C" }}>{v.label}</option>
                 ))}
               </select>
             </Field>
@@ -247,8 +489,9 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}
               style={{
-                border: `1px dashed ${C.line2}`, borderRadius: 8, padding: 14,
-                textAlign: "center", color: C.dim2, fontSize: 12, cursor: "pointer",
+                border: `1px dashed ${C.border}`, borderRadius: 8, padding: 16,
+                textAlign: "center", color: C.dim, fontSize: 12, cursor: "pointer",
+                background: "rgba(255,255,255,0.01)",
               }}
             >
               Drop files here, or click to attach
@@ -258,8 +501,8 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
                 {task.files.map((f) => (
                   <span key={f.id} style={{
-                    display: "flex", alignItems: "center", gap: 6, background: C.panel2,
-                    border: `1px solid ${C.line2}`, borderRadius: 6, padding: "4px 8px", fontSize: 11.5, color: C.dim,
+                    display: "flex", alignItems: "center", gap: 6, background: C.panelElevated,
+                    border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 8px", fontSize: 11.5, color: C.dim,
                   }}>
                     <FileText size={11} /> {f.name}
                     <X size={11} style={{ cursor: "pointer" }}
@@ -272,18 +515,20 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
 
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 4 }}>
             <button onClick={() => onDelete(task.id)} style={{
-              background: "transparent", border: `1px solid ${C.line2}`, color: C.dim,
-              borderRadius: 8, padding: "8px 12px", fontSize: 12.5, cursor: "pointer",
+              background: "transparent", border: `1px solid ${C.border}`, color: C.dim,
+              borderRadius: 8, padding: "8px 14px", fontSize: 12.5, cursor: "pointer",
               display: "flex", alignItems: "center", gap: 6, fontFamily: "inherit",
+              transition: "all 0.15s ease",
             }}>
               <Trash2 size={13} /> Delete
             </button>
             <button onClick={() => onComplete(task.id)} style={{
-              background: C.green, border: "none", color: "#0B1A12", fontWeight: 500,
-              borderRadius: 8, padding: "8px 14px", fontSize: 12.5, cursor: "pointer",
+              background: C.green, border: "none", color: "#0B1A12", fontWeight: 600,
+              borderRadius: 8, padding: "8px 16px", fontSize: 12.5, cursor: "pointer",
               display: "flex", alignItems: "center", gap: 6, fontFamily: "inherit",
+              boxShadow: `0 4px 12px ${C.green}22`,
             }}>
-              <Check size={13} /> Mark complete
+              <Check size={13} strokeWidth={2.5} /> Mark complete
             </button>
           </div>
         </div>
@@ -305,8 +550,17 @@ function NewTask({ onAdd, onCancel }) {
     });
   };
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.amberDim}`, borderRadius: 12, padding: 16, display: "grid", gap: 12 }}>
-      <input autoFocus style={{ ...inputS, fontSize: 14.5 }} placeholder="What are you working on?"
+    <div style={{
+      background: C.panel,
+      border: `1px solid ${C.borderActive}`,
+      borderRadius: 12,
+      padding: 18,
+      display: "grid",
+      gap: 14,
+      boxShadow: `0 8px 32px ${C.amberGlow}`,
+      backdropFilter: "blur(12px)",
+    }}>
+      <input autoFocus style={{ ...inputS, fontSize: 14.5, background: "rgba(255,255,255,0.03)" }} placeholder="What are you working on?"
         value={t.title} onChange={(e) => setT({ ...t, title: e.target.value })}
         onKeyDown={(e) => e.key === "Enter" && submit()} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 10 }}>
@@ -314,7 +568,7 @@ function NewTask({ onAdd, onCancel }) {
         <Field label="End"><input type="time" style={inputS} value={t.end} onChange={(e) => setT({ ...t, end: e.target.value })} /></Field>
         <Field label="Priority">
           <select style={inputS} value={t.priority} onChange={(e) => setT({ ...t, priority: e.target.value })}>
-            {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k} style={{ background: C.panel }}>{v.label}</option>)}
+            {Object.entries(PRIORITIES).map(([k, v]) => <option key={k} value={k} style={{ background: "#11141C" }}>{v.label}</option>)}
           </select>
         </Field>
       </div>
@@ -327,14 +581,14 @@ function NewTask({ onAdd, onCancel }) {
         ))}
       </div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-        <button onClick={onCancel} style={{ background: "transparent", border: `1px solid ${C.line2}`, color: C.dim, borderRadius: 8, padding: "8px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-        <button onClick={submit} style={{ background: C.amber, border: "none", color: "#1A1204", fontWeight: 500, borderRadius: 8, padding: "8px 16px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Add task</button>
+        <button onClick={onCancel} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim, borderRadius: 8, padding: "8px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+        <button onClick={submit} style={{ background: C.amber, border: "none", color: "#1A1204", fontWeight: 600, borderRadius: 8, padding: "8px 16px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Add task</button>
       </div>
     </div>
   );
 }
 
-/* ── app ── */
+/* ── main app ── */
 export default function FlowTrack() {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -343,41 +597,139 @@ export default function FlowTrack() {
   const [q, setQ] = useState("");
   const [openDate, setOpenDate] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
+  
+  /* ── username setup ── */
+  const [username, setUsername] = useState("Developer");
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [tempName, setTempName] = useState("");
+  
+  /* ── dashboard time filter ── */
+  const [range, setRange] = useState("7d");
+
   const impRef = useRef(null);
 
-  useEffect(() => { loadTasks().then((t) => { setTasks(t); setLoading(false); }); }, []);
-  const persist = (next) => { setTasks(next); saveTasks(next); };
+  useEffect(() => {
+    // Load tasks
+    loadTasks().then((t) => {
+      setTasks(t);
+      setLoading(false);
+    });
+    // Load username
+    const savedName = localStorage.getItem(K_NAME);
+    if (savedName) {
+      setUsername(savedName);
+      setTempName(savedName);
+    } else {
+      setTempName("Developer");
+    }
+  }, []);
 
+  const persist = (next) => {
+    setTasks(next);
+    saveTasks(next);
+  };
+
+  const saveName = () => {
+    const trimmed = tempName.trim();
+    if (trimmed) {
+      setUsername(trimmed);
+      localStorage.setItem(K_NAME, trimmed);
+    }
+    setIsEditingName(false);
+  };
+
+  const getGreeting = () => {
+    const hr = new Date().getHours();
+    if (hr < 12) return "Good morning";
+    if (hr < 17) return "Good afternoon";
+    return "Good evening";
+  };
+
+  /* ── base splits ── */
   const today = tasks.filter((t) => t.status !== "completed");
   const done = tasks.filter((t) => t.status === "completed");
 
+  /* ── analytics calculations filtered by range ── */
+  const rangeLimitDate = useMemo(() => {
+    const d = new Date();
+    if (range === "7d") d.setDate(d.getDate() - 7);
+    else if (range === "30d") d.setDate(d.getDate() - 30);
+    else return null;
+    return d.toISOString().slice(0, 10);
+  }, [range]);
+
+  const filteredTasks = useMemo(() => {
+    if (!rangeLimitDate) return tasks;
+    return tasks.filter((t) => t.date >= rangeLimitDate || (t.completedDate && t.completedDate >= rangeLimitDate));
+  }, [tasks, rangeLimitDate]);
+
   const stats = useMemo(() => {
-    const mins = tasks.reduce((s, t) => s + minutesBetween(t.start, t.end), 0);
+    const total = filteredTasks.length;
+    const completedTasks = filteredTasks.filter((t) => t.status === "completed");
+    const completed = completedTasks.length;
+    const pending = total - completed;
+    
+    // Focus hours
+    const mins = filteredTasks.reduce((s, t) => s + minutesBetween(t.start, t.end), 0);
+    
+    // Today stats
     const todayMins = today.reduce((s, t) => s + minutesBetween(t.start, t.end), 0);
     const doneToday = done.filter((t) => t.completedDate === todayISO()).length;
     const totalToday = today.length + doneToday;
-    return {
-      pct: totalToday ? Math.round((doneToday / totalToday) * 100) : 0,
-      doneToday, totalToday, todayMins, mins,
-      total: tasks.length, completed: done.length, pending: today.length,
-    };
-  }, [tasks, today, done]);
+    const pct = totalToday ? Math.round((doneToday / totalToday) * 100) : 0;
 
+    // Focus streak (always calculated on full history)
+    const streak = calculateStreak(tasks);
+
+    return {
+      pct, doneToday, totalToday, todayMins, mins,
+      total, completed, pending, streak
+    };
+  }, [filteredTasks, tasks, today, done]);
+
+  /* ── donut priority breakdown data ── */
+  const priorityData = useMemo(() => {
+    return Object.keys(PRIORITIES).map((key) => ({
+      key,
+      label: PRIORITIES[key].label,
+      color: PRIORITIES[key].c,
+      count: filteredTasks.filter((t) => t.priority === key).length
+    }));
+  }, [filteredTasks]);
+
+  /* ── line chart trend (completed tasks count per day) ── */
+  const trendData = useMemo(() => {
+    const numDays = range === "all" ? 7 : range === "30d" ? 30 : 7;
+    return Array.from({ length: numDays }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (numDays - 1 - i));
+      const iso = d.toISOString().slice(0, 10);
+      const count = done.filter((t) => t.completedDate === iso).length;
+      return {
+        label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        val: count
+      };
+    });
+  }, [done, range]);
+
+  /* ── focus breakdown by tags ── */
+  const tagMins = useMemo(() => {
+    const m = {};
+    filteredTasks.forEach((t) => {
+      const d = minutesBetween(t.start, t.end);
+      (t.tags || []).forEach((tag) => { m[tag] = (m[tag] || 0) + d; });
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [filteredTasks]);
+
+  /* ── grouped completions for "completed" list ── */
   const byDate = useMemo(() => {
     const m = {};
     done.forEach((t) => { (m[t.completedDate] ||= []).push(t); });
     return Object.entries(m).sort((a, b) => b[0].localeCompare(a[0]));
   }, [done]);
 
-  const tagMins = useMemo(() => {
-    const m = {};
-    tasks.forEach((t) => {
-      const d = minutesBetween(t.start, t.end);
-      (t.tags || []).forEach((tag) => { m[tag] = (m[tag] || 0) + d; });
-    });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [tasks]);
-
+  /* ── search results ── */
   const results = useMemo(() => {
     if (!q.trim()) return [];
     const s = q.toLowerCase();
@@ -424,8 +776,11 @@ export default function FlowTrack() {
 
   if (loading) {
     return (
-      <div style={{ background: C.bg, minHeight: "100vh", display: "grid", placeItems: "center", color: C.dim2, fontSize: 13 }}>
-        Loading your work…
+      <div style={{ background: C.bg, minHeight: "100vh", display: "grid", placeItems: "center", color: C.dim, fontSize: 13 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <Loader2 size={16} className="anim-rotate" color={C.amber} />
+          Loading your space…
+        </div>
       </div>
     );
   }
@@ -433,104 +788,181 @@ export default function FlowTrack() {
   return (
     <div style={{
       background: C.bg, minHeight: "100vh", color: C.txt, display: "flex",
-      fontFamily: "ui-sans-serif, -apple-system, 'Segoe UI', sans-serif",
     }}>
-      {/* sidebar */}
+      {/* ── sidebar ── */}
       <aside style={{
-        width: 208, borderRight: `1px solid ${C.line}`, padding: 20, flexShrink: 0,
+        width: 218, borderRight: `1px solid ${C.border}`, padding: 22, flexShrink: 0,
         display: "flex",
         position: "sticky", top: 0, height: "100vh",
         flexDirection: "column",
+        background: "rgba(10, 11, 16, 0.4)",
+        backdropFilter: "blur(20px)",
+        zIndex: 10,
       }} className={`ft-side${navOpen ? "" : " ft-closed"}`}>
+        
+        {/* logo */}
         <div style={{ marginBottom: 28 }}>
-          <div style={{ fontSize: 15, fontWeight: 500, letterSpacing: "-.01em" }}>FlowTrack</div>
-          <div style={{ fontSize: 10.5, color: C.dim2, letterSpacing: ".1em", textTransform: "uppercase", marginTop: 3 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-.02em", color: C.txt }}>FlowTrack</div>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: ".08em", textTransform: "uppercase", marginTop: 3, fontWeight: 500 }}>
             Plan · Execute · Reflect
           </div>
         </div>
-        <nav style={{ display: "grid", gap: 2 }}>
+
+        {/* nav */}
+        <nav style={{ display: "grid", gap: 4 }}>
           {NAV.map(({ k, label, Icon }) => (
-            <button key={k} onClick={() => { setView(k); setNavOpen(false); }} style={{
-              display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
-              background: view === k ? C.panel2 : "transparent",
-              border: "none", borderRadius: 7, cursor: "pointer",
+            <button key={k} className="nav-btn" onClick={() => { setView(k); setNavOpen(false); }} style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
+              background: view === k ? "rgba(255,255,255,0.03)" : "transparent",
+              border: `1px solid ${view === k ? C.border : "transparent"}`, borderRadius: 8, cursor: "pointer",
               color: view === k ? C.txt : C.dim, fontSize: 13, textAlign: "left",
-              width: "100%", fontFamily: "inherit",
+              width: "100%", fontFamily: "inherit", fontWeight: view === k ? 500 : 400,
             }}>
-              <Icon size={15} color={view === k ? C.amber : C.dim2} /> {label}
+              <Icon size={14.5} color={view === k ? C.amber : C.dim} /> {label}
             </button>
           ))}
         </nav>
 
+        {/* export / import */}
         <div style={{ marginTop: "auto" }}>
-          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
             <button onClick={exportJSON} style={{
               flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-              background: "transparent", border: `1px solid ${C.line2}`, color: C.dim,
-              borderRadius: 6, padding: "6px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+              background: "transparent", border: `1px solid ${C.border}`, color: C.dim,
+              borderRadius: 8, padding: "7px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+              transition: "all 0.15s ease",
             }}>
               <Download size={12} /> Export
             </button>
             <button onClick={() => impRef.current?.click()} style={{
               flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-              background: "transparent", border: `1px solid ${C.line2}`, color: C.dim,
-              borderRadius: 6, padding: "6px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+              background: "transparent", border: `1px solid ${C.border}`, color: C.dim,
+              borderRadius: 8, padding: "7px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+              transition: "all 0.15s ease",
             }}>
               <Upload size={12} /> Import
             </button>
           </div>
           <input ref={impRef} type="file" accept="application/json" hidden
             onChange={(e) => e.target.files[0] && importJSON(e.target.files[0])} />
-          <div style={{ fontSize: 9.5, color: C.dim2, lineHeight: 1.5 }}>
-            Saved in this browser only. Export to back up or move devices.
+
+          {/* user profile profile display card */}
+          <div style={{
+            background: "rgba(255,255,255,0.02)",
+            border: `1px solid ${C.border}`,
+            borderRadius: 12,
+            padding: "10px 12px",
+            display: "flex",
+            alignItems: "center",
+            gap: 10
+          }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: "50%",
+              background: `linear-gradient(135deg, ${C.amber}, #EF4444)`,
+              display: "grid", placeItems: "center", color: "#000", fontWeight: 700, fontSize: 13,
+            }}>
+              {username[0].toUpperCase()}
+            </div>
+            <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+              {isEditingName ? (
+                <input
+                  value={tempName}
+                  onChange={(e) => setTempName(e.target.value)}
+                  onBlur={saveName}
+                  onKeyDown={(e) => e.key === "Enter" && saveName()}
+                  autoFocus
+                  style={{
+                    background: C.panelElevated,
+                    border: `1px solid ${C.amber}`,
+                    borderRadius: 4,
+                    padding: "2px 4px",
+                    fontSize: 12,
+                    color: C.txt,
+                    width: "100%",
+                    outline: "none",
+                  }}
+                />
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: C.txt, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {username}
+                  </span>
+                  <button onClick={() => setIsEditingName(true)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex" }}>
+                    <Edit2 size={10} color={C.dim} />
+                  </button>
+                </div>
+              )}
+              <div style={{ fontSize: 9.5, color: C.dim }}>Task Partner</div>
+            </div>
           </div>
         </div>
       </aside>
 
-      {/* main */}
-      <main style={{ flex: 1, minWidth: 0, padding: "28px 32px 64px", maxWidth: 940 }}>
+      {/* ── main space ── */}
+      <main style={{ flex: 1, minWidth: 0, padding: "32px 40px 64px", maxWidth: 960 }}>
+        
+        {/* mobile burger */}
         <button onClick={() => setNavOpen(!navOpen)} className="ft-burger" style={{
-          display: "none", background: "transparent", border: `1px solid ${C.line2}`,
-          color: C.dim, borderRadius: 7, padding: 7, marginBottom: 14, cursor: "pointer",
+          display: "none", background: "transparent", border: `1px solid ${C.border}`,
+          color: C.dim, borderRadius: 8, padding: 8, marginBottom: 16, cursor: "pointer",
         }}>
           <Menu size={16} />
         </button>
 
+        {/* ── Today view ── */}
         {view === "today" && (
           <>
-            <div style={{ marginBottom: 26 }}>
-              <div style={{ fontSize: 11, color: C.dim2, letterSpacing: ".1em", textTransform: "uppercase", marginBottom: 6 }}>
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ fontSize: 10.5, color: C.dim, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 6, fontWeight: 500 }}>
                 {fmtDate(todayISO())}
               </div>
-              <h1 style={{ fontSize: 26, fontWeight: 500, margin: "0 0 20px", letterSpacing: "-.02em" }}>
-                Today's work
+              <h1 style={{ fontSize: 28, fontWeight: 700, margin: "0 0 20px", letterSpacing: "-.02em", color: C.txt }}>
+                {getGreeting()}, <span style={{
+                  background: `linear-gradient(135deg, ${C.amber}, #F59E0B)`,
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  fontWeight: 800,
+                }}>{username}</span>
               </h1>
-              <div style={{ display: "flex", gap: 32, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 32, alignItems: "center", flexWrap: "wrap", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: "16px 20px" }}>
                 <div style={{ flex: "1 1 240px", minWidth: 200 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.dim, marginBottom: 7 }}>
-                    <span>{stats.doneToday} of {stats.totalToday} done</span>
-                    <span style={{ color: C.amber, fontVariantNumeric: "tabular-nums" }}>{stats.pct}%</span>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: C.dim, marginBottom: 7 }}>
+                    <span>Progress: <strong>{stats.doneToday}</strong> of <strong>{stats.totalToday}</strong> completed</span>
+                    <span style={{ color: C.amber, fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{stats.pct}%</span>
                   </div>
                   <Bar pct={stats.pct} />
                 </div>
-                <div>
-                  <div style={{ fontSize: 22, fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>
-                    {fmtDur(stats.todayMins)}
+                <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                      {fmtDur(stats.todayMins)}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: C.dim, textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 2 }}>Logged time</div>
                   </div>
-                  <div style={{ fontSize: 11, color: C.dim2 }}>scheduled</div>
+                  {stats.streak > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.15)", borderRadius: 8, padding: "6px 12px" }}>
+                      <Flame size={16} color="#EF4444" style={{ filter: "drop-shadow(0 0 4px rgba(239,68,68,0.4))" }} />
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#EF4444" }}>{stats.streak} Days</div>
+                        <div style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: "0.03em" }}>Focus Streak</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "grid", gap: 12 }}>
               {adding
                 ? <NewTask onAdd={(t) => { persist([...tasks, t]); setAdding(false); }} onCancel={() => setAdding(false)} />
                 : <button onClick={() => setAdding(true)} style={{
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
-                    background: "transparent", border: `1px dashed ${C.line2}`, color: C.dim,
-                    borderRadius: 10, padding: 13, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                    background: "rgba(255,255,255,0.01)", border: `1px dashed ${C.border}`, color: C.dim,
+                    borderRadius: 12, padding: 14, fontSize: 13.5, cursor: "pointer", fontFamily: "inherit",
+                    transition: "all 0.15s ease",
                   }}>
-                    <Plus size={14} /> New task
+                    <Plus size={15} /> New Task
                   </button>
               }
               {today.map((t) => (
@@ -540,60 +972,61 @@ export default function FlowTrack() {
                   onComplete={complete} />
               ))}
               {today.length === 0 && !adding && (
-                <div style={{ textAlign: "center", padding: "48px 20px", color: C.dim2, fontSize: 13 }}>
-                  Nothing planned yet. Add the first thing you'll work on.
+                <div style={{ textAlign: "center", padding: "64px 20px", color: C.dim, fontSize: 13.5, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16 }}>
+                  No active tasks planned. Add your first goal to get started!
                 </div>
               )}
             </div>
           </>
         )}
 
+        {/* ── Completed view ── */}
         {view === "completed" && (
           <>
-            <h1 style={{ fontSize: 26, fontWeight: 500, margin: "0 0 24px", letterSpacing: "-.02em" }}>Completed work</h1>
+            <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 24px", letterSpacing: "-.02em", color: C.txt }}>Completed Logs</h1>
             {byDate.length === 0 && (
-              <div style={{ textAlign: "center", padding: "48px 20px", color: C.dim2, fontSize: 13 }}>
-                Finished tasks land here, grouped by the day you closed them.
+              <div style={{ textAlign: "center", padding: "64px 20px", color: C.dim, fontSize: 13.5, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16 }}>
+                Completed tasks will be saved and grouped here chronologically.
               </div>
             )}
-            <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "grid", gap: 10 }}>
               {byDate.map(([d, list]) => (
-                <div key={d} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+                <div key={d} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", backdropFilter: "blur(12px)" }}>
                   <div onClick={() => setOpenDate(openDate === d ? null : d)} style={{
-                    padding: "13px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12,
+                    padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12,
                   }}>
-                    {openDate === d ? <ChevronDown size={15} color={C.dim2} /> : <ChevronRight size={15} color={C.dim2} />}
-                    <span style={{ fontSize: 14, fontWeight: 500, minWidth: 78 }}>{fmtShort(d)}</span>
-                    <span style={{ fontSize: 12, color: C.dim, flex: 1 }}>
+                    {openDate === d ? <ChevronDown size={14} color={C.dim} /> : <ChevronRight size={14} color={C.dim} />}
+                    <span style={{ fontSize: 14, fontWeight: 600, minWidth: 80, color: C.txt }}>{fmtShort(d)}</span>
+                    <span style={{ fontSize: 12, color: C.dim, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {list.map((t) => t.title).join(" · ")}
                     </span>
-                    <span style={{ fontSize: 11.5, color: C.green }}>{list.length}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: C.green, background: C.green + "11", border: `1px solid ${C.green}22`, borderRadius: 6, padding: "2px 7px" }}>{list.length}</span>
                   </div>
                   {openDate === d && (
-                    <div style={{ borderTop: `1px solid ${C.line}`, padding: 16, display: "grid", gap: 14 }}>
+                    <div style={{ borderTop: `1px solid ${C.border}`, padding: 18, display: "grid", gap: 14, background: "rgba(0,0,0,0.1)" }}>
                       {list.map((t) => (
-                        <div key={t.id} style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 9, padding: 14 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-                            <span style={{ fontSize: 13.5, fontWeight: 500 }}>{t.title}</span>
-                            {t.start && <span style={{ fontSize: 11, color: C.dim2 }}>{t.start} → {t.end}</span>}
+                        <div key={t.id} style={{ background: "rgba(255,255,255,0.015)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: C.txt }}>{t.title}</span>
+                            {t.start && <span style={{ fontSize: 11, color: C.dim }}>{t.start} → {t.end}</span>}
                             {(t.tags || []).map((tg) => (
-                              <span key={tg} style={{ fontSize: 10.5, color: C.dim2, background: C.panel2, borderRadius: 4, padding: "1px 6px" }}>{tg}</span>
+                              <span key={tg} style={{ fontSize: 10, color: C.dim, background: "rgba(255,255,255,0.04)", borderRadius: 4, padding: "1px 6px" }}>{tg}</span>
                             ))}
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
                             <div>
-                              <div style={{ fontSize: 10, color: C.dim2, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Planned</div>
+                              <div style={{ fontSize: 9.5, color: C.dim, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5, fontWeight: 500 }}>Planned</div>
                               <div style={{ fontSize: 12.5, color: C.dim, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{t.planned || "—"}</div>
                             </div>
                             <div>
-                              <div style={{ fontSize: 10, color: C.dim2, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Actually done</div>
-                              <div style={{ fontSize: 12.5, color: C.dim, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{t.done || "—"}</div>
+                              <div style={{ fontSize: 9.5, color: C.dim, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5, fontWeight: 500 }}>Actually done</div>
+                              <div style={{ fontSize: 12.5, color: C.txt, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{t.done || "—"}</div>
                             </div>
                           </div>
                           {(t.files || []).length > 0 && (
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
                               {t.files.map((f) => (
-                                <span key={f.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.dim2, background: C.panel2, borderRadius: 5, padding: "3px 7px" }}>
+                                <span key={f.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.dim, background: C.panelElevated, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px" }}>
                                   <FileText size={10} /> {f.name}
                                 </span>
                               ))}
@@ -609,63 +1042,150 @@ export default function FlowTrack() {
           </>
         )}
 
+        {/* ── Upgraded insightful dashboard view ── */}
         {view === "dashboard" && (
           <>
-            <h1 style={{ fontSize: 26, fontWeight: 500, margin: "0 0 24px", letterSpacing: "-.02em" }}>Dashboard</h1>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, marginBottom: 28 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 14 }}>
+              <div>
+                <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: "-.02em", color: C.txt }}>Space Analytics</h1>
+                <p style={{ fontSize: 12, color: C.dim, margin: "4px 0 0" }}>Interactive stats for <strong>{username}</strong></p>
+              </div>
+
+              {/* Range Selector */}
+              <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
+                {[
+                  ["7d", "7 Days"],
+                  ["30d", "30 Days"],
+                  ["all", "All Time"]
+                ].map(([k, label]) => (
+                  <button key={k} onClick={() => setRange(k)} style={{
+                    background: range === k ? "rgba(255,255,255,0.06)" : "transparent",
+                    border: "none",
+                    borderRadius: 7,
+                    color: range === k ? C.txt : C.dim,
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    padding: "5px 12px",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    transition: "all 0.15s ease",
+                  }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Grid metrics */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 20 }}>
               {[
-                ["Total tasks", stats.total, C.txt],
-                ["Completed", stats.completed, C.green],
-                ["Pending", stats.pending, C.amber],
-                ["Hours logged", fmtDur(stats.mins), C.txt],
-              ].map(([l, v, c]) => (
-                <div key={l} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 11, padding: 16 }}>
-                  <div style={{ fontSize: 22, fontWeight: 500, color: c, fontVariantNumeric: "tabular-nums" }}>{v}</div>
-                  <div style={{ fontSize: 11, color: C.dim2, marginTop: 4 }}>{l}</div>
+                ["Tasks tracked", stats.total, C.txt, "total"],
+                ["Completed", stats.completed, C.green, "completed"],
+                ["Completion rate", `${stats.total ? Math.round((stats.completed / stats.total) * 100) : 0}%`, C.amber, "rate"],
+                ["Focused time", fmtDur(stats.mins), C.blue, "time"],
+              ].map(([l, v, c, k]) => (
+                <div key={l} style={{
+                  background: C.panel,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 14,
+                  padding: 18,
+                  backdropFilter: "blur(12px)",
+                }}>
+                  <div style={{ fontSize: 24, fontWeight: 700, color: c, fontVariantNumeric: "tabular-nums" }}>{v}</div>
+                  <div style={{ fontSize: 11.5, color: C.dim, marginTop: 4, fontWeight: 500 }}>{l}</div>
                 </div>
               ))}
             </div>
 
-            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 16 }}>Time by tag</div>
-              {tagMins.length === 0
-                ? <div style={{ fontSize: 12, color: C.dim2 }}>Tag your tasks and schedule times to see where hours go.</div>
-                : <div style={{ display: "grid", gap: 11 }}>
-                    {tagMins.map(([tag, m]) => (
-                      <div key={tag}>
-                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.dim, marginBottom: 5 }}>
-                          <span>{tag}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtDur(m)}</span>
-                        </div>
-                        <Bar pct={(m / tagMins[0][1]) * 100} />
-                      </div>
-                    ))}
-                  </div>
-              }
+            {/* Charts section */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14, marginBottom: 20 }}>
+              
+              {/* Line chart trend */}
+              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)", display: "flex", flexDirection: "column" }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Completion Trend</div>
+                <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
+                  <SVGLinesChart data={trendData} color={C.amber} label="Tasks completed" />
+                </div>
+              </div>
+
+              {/* Priority Donut chart */}
+              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)", display: "flex", flexDirection: "column" }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Priority Split</div>
+                <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
+                  <SVGPieChart data={priorityData} />
+                </div>
+              </div>
             </div>
 
-            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 16 }}>Last 12 weeks</div>
-              <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                {Array.from({ length: 84 }, (_, i) => {
-                  const d = new Date();
-                  d.setDate(d.getDate() - (83 - i));
-                  const iso = d.toISOString().slice(0, 10);
-                  const n = done.filter((t) => t.completedDate === iso).length;
-                  const bg = n === 0 ? C.line : n === 1 ? C.amberDim : n <= 3 ? "#B8801F" : C.amber;
-                  return <div key={i} title={`${iso} — ${n} completed`} style={{ width: 11, height: 11, borderRadius: 2, background: bg }} />;
-                })}
+            {/* Tag / Category Distribution */}
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, marginBottom: 20, backdropFilter: "blur(12px)" }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Time Distribution by Tags</div>
+              {tagMins.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: C.dim, padding: "10px 0" }}>Create tasks with tags and input time details to generate analytical charts.</div>
+              ) : (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {tagMins.map(([tag, m]) => (
+                    <div key={tag}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.dim, marginBottom: 5 }}>
+                        <span style={{ fontWeight: 500, color: C.txt }}>{tag}</span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", color: C.dim }}>{fmtDur(m)}</span>
+                      </div>
+                      <Bar pct={(m / tagMins[0][1]) * 100} color={C.blue} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Activity heatmap */}
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: C.txt }}>Activity Grid</div>
+                <div style={{ display: "flex", gap: 8, fontSize: 9.5, color: C.dim, alignItems: "center" }}>
+                  <span>Less</span>
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(255,255,255,0.04)" }} />
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber + "33" }} />
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber + "aa" }} />
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber }} />
+                  <span>More</span>
+                </div>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <div style={{ display: "flex", gap: 3, paddingBottom: 6 }}>
+                  {Array.from({ length: 84 }, (_, i) => {
+                    const d = new Date();
+                    d.setDate(d.getDate() - (83 - i));
+                    const iso = d.toISOString().slice(0, 10);
+                    const n = done.filter((t) => t.completedDate === iso).length;
+                    const bg = n === 0 ? "rgba(255,255,255,0.04)" : n === 1 ? C.amber + "33" : n <= 3 ? C.amber + "aa" : C.amber;
+                    return (
+                      <div key={i} title={`${iso}: ${n} tasks completed`} style={{
+                        width: 10, height: 10, borderRadius: 2, background: bg, flexShrink: 0,
+                        transition: "transform 0.15s ease",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.25)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1.0)"; }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.dim, marginTop: 6, padding: "0 2px" }}>
+                <span>12 Weeks Ago</span>
+                <span>Today</span>
               </div>
             </div>
           </>
         )}
 
+        {/* ── Calendar view ── */}
         {view === "calendar" && (
           <>
-            <h1 style={{ fontSize: 26, fontWeight: 500, margin: "0 0 24px", letterSpacing: "-.02em" }}>Calendar</h1>
-            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 }}>
-                {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-                  <div key={i} style={{ textAlign: "center", fontSize: 10.5, color: C.dim2, paddingBottom: 6 }}>{d}</div>
+            <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 24px", letterSpacing: "-.02em", color: C.txt }}>Calendar Logs</h1>
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 20, backdropFilter: "blur(12px)" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 8 }}>
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => (
+                  <div key={i} style={{ textAlign: "center", fontSize: 11, color: C.dim, paddingBottom: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{d}</div>
                 ))}
                 {(() => {
                   const now = new Date();
@@ -679,14 +1199,23 @@ export default function FlowTrack() {
                     const isToday = iso === todayISO();
                     cells.push(
                       <button key={d} onClick={() => { setView("completed"); setOpenDate(iso); }} style={{
-                        aspectRatio: "1", background: isToday ? C.panel2 : "transparent",
-                        border: `1px solid ${isToday ? C.amberDim : C.line}`, borderRadius: 7,
-                        color: C.txt, fontSize: 12, cursor: "pointer", display: "grid",
+                        aspectRatio: "1", background: isToday ? "rgba(255,255,255,0.03)" : "transparent",
+                        border: `1px solid ${isToday ? C.amber : C.border}`, borderRadius: 10,
+                        color: C.txt, fontSize: 13, cursor: "pointer", display: "grid",
                         placeItems: "center", position: "relative", fontFamily: "inherit",
-                        fontVariantNumeric: "tabular-nums",
-                      }}>
+                        fontVariantNumeric: "tabular-nums", transition: "all 0.15s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = C.amber;
+                        e.currentTarget.style.background = "rgba(255,255,255,0.02)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = isToday ? C.amber : C.border;
+                        e.currentTarget.style.background = isToday ? "rgba(255,255,255,0.03)" : "transparent";
+                      }}
+                      >
                         {d}
-                        {n > 0 && <div style={{ position: "absolute", bottom: 5, width: 4, height: 4, borderRadius: 999, background: C.green }} />}
+                        {n > 0 && <div style={{ position: "absolute", bottom: 6, width: 5, height: 5, borderRadius: "50%", background: C.green }} />}
                       </button>
                     );
                   }
@@ -697,31 +1226,35 @@ export default function FlowTrack() {
           </>
         )}
 
+        {/* ── Search view ── */}
         {view === "search" && (
           <>
-            <h1 style={{ fontSize: 26, fontWeight: 500, margin: "0 0 20px", letterSpacing: "-.02em" }}>Search</h1>
-            <input autoFocus style={{ ...inputS, padding: 12, fontSize: 14, marginBottom: 16 }}
-              placeholder="Search titles, plans, notes, tags…" value={q} onChange={(e) => setQ(e.target.value)} />
-            <div style={{ display: "grid", gap: 8 }}>
+            <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 20px", letterSpacing: "-.02em", color: C.txt }}>Search Space</h1>
+            <div style={{ position: "relative", marginBottom: 18 }}>
+              <input autoFocus style={{ ...inputS, padding: "14px 16px 14px 44px", fontSize: 14.5, background: C.panel, border: `1px solid ${C.border}` }}
+                placeholder="Search task titles, logs, reflections, tags…" value={q} onChange={(e) => setQ(e.target.value)} />
+              <SearchIcon size={16} color={C.dim} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)" }} />
+            </div>
+            <div style={{ display: "grid", gap: 10 }}>
               {results.map((t) => (
-                <div key={t.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 13 }}>
+                <div key={t.id} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, backdropFilter: "blur(12px)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 13.5, fontWeight: 500 }}>{t.title}</span>
-                    <span style={{ fontSize: 11, color: STATUSES[t.status].c }}>{STATUSES[t.status].label}</span>
-                    <span style={{ fontSize: 11, color: C.dim2, marginLeft: "auto" }}>
+                    <span style={{ fontSize: 14.5, fontWeight: 600, color: C.txt }}>{t.title}</span>
+                    <span style={{ fontSize: 10.5, fontWeight: 500, color: STATUSES[t.status].c, background: STATUSES[t.status].c + "11", border: `1px solid ${STATUSES[t.status].c}22`, borderRadius: 5, padding: "2px 7px" }}>{STATUSES[t.status].label}</span>
+                    <span style={{ fontSize: 11, color: C.dim, marginLeft: "auto" }}>
                       {fmtShort(t.completedDate || t.date)}
                     </span>
                   </div>
                   {(t.done || t.planned) && (
-                    <div style={{ fontSize: 12, color: C.dim2, marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div style={{ fontSize: 12.5, color: C.dim, marginTop: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {(t.done || t.planned).slice(0, 120)}
                     </div>
                   )}
                 </div>
               ))}
               {q && results.length === 0 && (
-                <div style={{ textAlign: "center", padding: 40, color: C.dim2, fontSize: 13 }}>
-                  No matches for "{q}".
+                <div style={{ textAlign: "center", padding: 48, color: C.dim, fontSize: 13.5, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16 }}>
+                  No records match "{q}".
                 </div>
               )}
             </div>
@@ -731,11 +1264,40 @@ export default function FlowTrack() {
 
       <style>{`
         * { box-sizing: border-box; }
-        input[type=time]::-webkit-calendar-picker-indicator { filter: invert(.6); }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-thumb { background: ${C.line2}; border-radius: 4px; }
+        input[type=time]::-webkit-calendar-picker-indicator { filter: invert(.8); }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 999px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); }
+        
+        input:focus, select:focus, textarea:focus {
+          border-color: ${C.amber} !important;
+          background: rgba(255, 255, 255, 0.04) !important;
+          box-shadow: 0 0 0 1px ${C.amber}11;
+        }
+
+        .nav-btn:hover {
+          background: rgba(255,255,255,0.02) !important;
+          color: ${C.txt} !important;
+        }
+
+        .task-card {
+          transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+        }
+        .task-card:hover {
+          border-color: rgba(255, 172, 51, 0.15) !important;
+          box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+        }
+
+        .anim-rotate {
+          animation: spin 3s linear infinite;
+        }
+        @keyframes spin {
+          100% { transform: rotate(360deg); }
+        }
+
         @media (max-width: 720px) {
-          .ft-side { position: fixed; z-index: 20; background: ${C.panel}; }
+          .ft-side { position: fixed; z-index: 20; background: ${C.bg}; }
           .ft-side.ft-closed { display: none !important; }
           .ft-burger { display: block !important; }
         }
