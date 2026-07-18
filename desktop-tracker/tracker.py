@@ -14,7 +14,7 @@ DB_PATH = os.path.join(BASE_DIR, "autologs.db")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 # State variables
-is_paused = False
+is_paused = True
 config = {}
 
 # Windows Win32 API Definitions for active window tracking
@@ -222,6 +222,7 @@ class APIHandler(BaseHTTPRequestHandler):
 def run_server(port=5001):
     server = HTTPServer(("localhost", port), APIHandler)
     print(f"API Server listening on http://localhost:{port}")
+    print("Tracker started in PAUSED state. Enable it from the FlowTrack website to begin tracking.")
     server.serve_forever()
 
 if __name__ == "__main__":

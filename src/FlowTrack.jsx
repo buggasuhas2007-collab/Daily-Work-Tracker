@@ -521,7 +521,7 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
             )}
           </Field>
 
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 4 }}>
+          <div style={{ display: "flex", gap: 8, justifycontent: "flex-end", paddingTop: 4 }}>
             <button onClick={() => onDelete(task.id)} style={{
               background: "transparent", border: `1px solid ${C.border}`, color: C.dim,
               borderRadius: 8, padding: "8px 14px", fontSize: 12.5, cursor: "pointer",
@@ -776,6 +776,25 @@ export default function FlowTrack() {
   const today = tasks.filter((t) => t.status !== "completed");
   const done = tasks.filter((t) => t.status === "completed");
 
+  const cleanTitle = (title) => {
+    if (!title) return "";
+    const suffixes = [
+      " - Google Chrome",
+      " - Microsoft Edge",
+      " - Mozilla Firefox",
+      " - Brave",
+      " - Opera",
+      " - Internet Explorer"
+    ];
+    let clean = title;
+    suffixes.forEach((suffix) => {
+      if (clean.endsWith(suffix)) {
+        clean = clean.slice(0, -suffix.length);
+      }
+    });
+    return clean;
+  };
+
   /* ── auto-tracker logs aggregation into clean blocks ── */
   const aggregatedBlocks = useMemo(() => {
     if (autoLogs.length === 0) return [];
@@ -786,12 +805,14 @@ export default function FlowTrack() {
     let currentBlock = null;
 
     sorted.forEach((log) => {
+      const cleaned = cleanTitle(log.title);
       if (!currentBlock) {
         currentBlock = {
           id: uid(),
           app: log.app,
           category: log.category,
-          title: log.title,
+          title: cleaned,
+          titles: cleaned ? [cleaned] : [],
           startTimestamp: log.timestamp,
           endTimestamp: log.timestamp,
           duration: 10, // 10 second polls
@@ -808,13 +829,17 @@ export default function FlowTrack() {
       if (sameApp && sameCategory && gap <= 120) {
         currentBlock.endTimestamp = log.timestamp;
         currentBlock.duration += 10;
+        if (cleaned && !currentBlock.titles.includes(cleaned)) {
+          currentBlock.titles.push(cleaned);
+        }
       } else {
         blocks.push(currentBlock);
         currentBlock = {
           id: uid(),
           app: log.app,
           category: log.category,
-          title: log.title,
+          title: cleaned,
+          titles: cleaned ? [cleaned] : [],
           startTimestamp: log.timestamp,
           endTimestamp: log.timestamp,
           duration: 10,
@@ -1345,7 +1370,7 @@ export default function FlowTrack() {
                     <div style={{ display: "grid", gap: 12 }}>
                       {tagMins.map(([tag, m]) => (
                         <div key={tag}>
-                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.dim, marginBottom: 5 }}>
+                          <div style={{ display: "flex", justifycontent: "space-between", fontSize: 12, color: C.dim, marginBottom: 5 }}>
                             <span style={{ fontWeight: 500, color: C.txt }}>{tag}</span>
                             <span style={{ fontVariantNumeric: "tabular-nums", color: C.dim }}>{fmtDur(m)}</span>
                           </div>
@@ -1358,7 +1383,7 @@ export default function FlowTrack() {
 
                 {/* Activity heatmap */}
                 <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <div style={{ display: "flex", justifycontent: "space-between", alignItems: "center", marginBottom: 16 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: C.txt }}>Activity Grid</div>
                     <div style={{ display: "flex", gap: 8, fontSize: 9.5, color: C.dim, alignItems: "center" }}>
                       <span>Less</span>
@@ -1389,7 +1414,7 @@ export default function FlowTrack() {
                       })}
                     </div>
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.dim, marginTop: 6, padding: "0 2px" }}>
+                  <div style={{ display: "flex", justifycontent: "space-between", fontSize: 10, color: C.dim, marginTop: 6, padding: "0 2px" }}>
                     <span>12 Weeks Ago</span>
                     <span>Today</span>
                   </div>
@@ -1403,7 +1428,7 @@ export default function FlowTrack() {
                 {/* Connection Status Card */}
                 <div style={{
                   background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: "18px 24px",
-                  display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 14,
+                  display: "flex", alignItems: "center", justifycontent: "space-between", flexWrap: "wrap", gap: 14,
                   backdropFilter: "blur(12px)",
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -1447,7 +1472,7 @@ export default function FlowTrack() {
                         </>
                       ) : (
                         <>
-                          <Play size={13} fill="currentColor" /> Resume Tracking
+                          <Play size={13} fill="currentColor" /> Start Tracking
                         </>
                       )}
                     </button>
@@ -1456,7 +1481,7 @@ export default function FlowTrack() {
 
                 {/* Aggregated Blocks Timeline */}
                 <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 20, backdropFilter: "blur(12px)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                  <div style={{ display: "flex", justifycontent: "space-between", alignItems: "center", marginBottom: 20 }}>
                     <h3 style={{ fontSize: 15, fontWeight: 700, color: C.txt, margin: 0 }}>Activity Timeline</h3>
                     {autoLogs.length > 0 && (
                       <button onClick={clearAutoLogs} style={{
@@ -1476,9 +1501,9 @@ export default function FlowTrack() {
                       return (
                         <div key={block.id} className="task-card" style={{
                           background: "rgba(255,255,255,0.01)", border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px",
-                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14
+                          display: "flex", alignItems: "center", justifycontent: "space-between", gap: 14
                         }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0, flex: 1 }}>
                             <div style={{
                               width: 36, height: 36, borderRadius: "50%",
                               background: block.category === "Coding" ? C.amber + "11" : block.category === "Research" ? C.blue + "11" : "rgba(255,255,255,0.02)",
@@ -1488,14 +1513,27 @@ export default function FlowTrack() {
                             }}>
                               <Clock size={16} />
                             </div>
-                            <div style={{ minWidth: 0 }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                                 <span style={{ fontSize: 13.5, fontWeight: 700, color: C.txt }}>{block.category}</span>
                                 <span style={{ fontSize: 11, color: C.dim }}>{block.app}</span>
                               </div>
-                              <div style={{ fontSize: 12, color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {block.title}
-                              </div>
+                              {block.titles && block.titles.length > 1 ? (
+                                <div style={{ display: "grid", gap: 4, marginTop: 6, paddingLeft: 8, borderLeft: `2px solid ${C.border}` }}>
+                                  {block.titles.map((title, idx) => (
+                                    <div key={idx} style={{ fontSize: 11.5, color: C.dim, display: "flex", gap: 6, alignItems: "center" }}>
+                                      <span style={{ color: C.amber, fontSize: 8 }}>•</span>
+                                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={title}>
+                                        {title}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: 12, color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {block.title}
+                                </div>
+                              )}
                             </div>
                           </div>
 
