@@ -3,12 +3,14 @@ import {
   Plus, Calendar as CalIcon, LayoutGrid, CheckCircle2, Search as SearchIcon,
   BarChart3, ChevronDown, ChevronRight, Paperclip, X, Trash2, Clock,
   Check, Circle, PauseCircle, Loader2, FileText, Menu, Download, Upload,
-  Flame, User, Edit2
+  Flame, User, Edit2, Monitor, Play, Pause, RefreshCw
 } from "lucide-react";
 
 /* ── storage keys ── */
 const K_TASKS = "ft:tasks:v1";
 const K_NAME = "ft:username:v1";
+const K_AUTOLOGS = "ft:autologs:v1";
+const K_LAST_SYNC = "ft:lastsync:v1";
 
 /* ── premium palette: slate base + glowing neon details ── */
 const C = {
@@ -62,6 +64,12 @@ function minutesBetween(a, b) {
   return d > 0 ? d : 0;
 }
 const fmtDur = (m) => `${Math.floor(m / 60)}h ${m % 60}m`;
+const fmtSeconds = (s) => {
+  if (s < 60) return `${s}s`;
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+};
 
 /* ── storage (localStorage — per browser, no account needed) ── */
 async function loadTasks() {
@@ -538,8 +546,28 @@ function TaskCard({ task, onUpdate, onDelete, onComplete }) {
 }
 
 /* ── new task form ── */
-function NewTask({ onAdd, onCancel }) {
-  const [t, setT] = useState({ title: "", start: "", end: "", priority: "medium", tags: [] });
+function NewTask({ onAdd, onCancel, prefill }) {
+  const [t, setT] = useState({
+    title: prefill?.title || "",
+    start: prefill?.start || "",
+    end: prefill?.end || "",
+    priority: prefill?.priority || "medium",
+    tags: prefill?.tags || []
+  });
+
+  // Keep prefill sync in case it loads asynchronously
+  useEffect(() => {
+    if (prefill) {
+      setT({
+        title: prefill.title,
+        start: prefill.start,
+        end: prefill.end,
+        priority: prefill.priority,
+        tags: prefill.tags
+      });
+    }
+  }, [prefill]);
+
   const submit = () => {
     if (!t.title.trim()) return;
     onAdd({
@@ -603,18 +631,25 @@ export default function FlowTrack() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState("");
   
-  /* ── dashboard time filter ── */
+  /* ── dashboard time filter and subtabs ── */
   const [range, setRange] = useState("7d");
+  const [dashTab, setDashTab] = useState("overview"); // "overview" or "auto"
+  const [prefillData, setPrefillData] = useState(null);
+
+  /* ── desktop auto tracker state ── */
+  const [trackerStatus, setTrackerStatus] = useState("offline"); // "active", "paused", "offline"
+  const [autoLogs, setAutoLogs] = useState([]);
+  const [lastSyncTime, setLastSyncTime] = useState(0);
 
   const impRef = useRef(null);
 
+  // Initialize storage values
   useEffect(() => {
-    // Load tasks
     loadTasks().then((t) => {
       setTasks(t);
       setLoading(false);
     });
-    // Load username
+
     const savedName = localStorage.getItem(K_NAME);
     if (savedName) {
       setUsername(savedName);
@@ -622,7 +657,99 @@ export default function FlowTrack() {
     } else {
       setTempName("Developer");
     }
+
+    const savedLogs = localStorage.getItem(K_AUTOLOGS);
+    if (savedLogs) {
+      setAutoLogs(JSON.parse(savedLogs));
+    }
+
+    const savedSync = localStorage.getItem(K_LAST_SYNC);
+    if (savedSync) {
+      setLastSyncTime(parseInt(savedSync));
+    }
   }, []);
+
+  // Poll Local Python Desktop Tracker every 15 seconds
+  useEffect(() => {
+    const checkTracker = async () => {
+      try {
+        const res = await fetch("http://localhost:5001/api/status");
+        if (res.ok) {
+          const data = await res.json();
+          setTrackerStatus(data.status); // "active" or "paused"
+          
+          if (data.status === "active") {
+            const logsRes = await fetch(`http://localhost:5001/api/logs?since=${lastSyncTime}`);
+            if (logsRes.ok) {
+              const logsData = await logsRes.json();
+              if (logsData.logs && logsData.logs.length > 0) {
+                const newLogs = logsData.logs;
+                setAutoLogs((prev) => {
+                  const merged = [...prev, ...newLogs];
+                  // Remove duplicates by timestamp
+                  const unique = [];
+                  const seen = new Set();
+                  merged.forEach(item => {
+                    const key = `${item.timestamp}-${item.app}`;
+                    if (!seen.has(key)) {
+                      seen.add(key);
+                      unique.push(item);
+                    }
+                  });
+                  localStorage.setItem(K_AUTOLOGS, JSON.stringify(unique));
+                  return unique;
+                });
+
+                const maxTime = Math.max(...newLogs.map(l => l.timestamp));
+                const nextSync = maxTime + 1;
+                setLastSyncTime(nextSync);
+                localStorage.setItem(K_LAST_SYNC, nextSync.toString());
+              }
+            }
+          }
+        } else {
+          setTrackerStatus("offline");
+        }
+      } catch {
+        setTrackerStatus("offline");
+      }
+    };
+
+    checkTracker(); // Initial run
+    const interval = setInterval(checkTracker, 15000);
+    return () => clearInterval(interval);
+  }, [lastSyncTime]);
+
+  const toggleTracker = async () => {
+    if (trackerStatus === "offline") return;
+    try {
+      const res = await fetch("http://localhost:5001/api/toggle", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setTrackerStatus(data.status);
+      }
+    } catch (e) {
+      console.error("Failed to toggle tracker", e);
+    }
+  };
+
+  const clearAutoLogs = () => {
+    if (window.confirm("Are you sure you want to clear your local auto-activity logs? This won't delete logged tasks.")) {
+      setAutoLogs([]);
+      setLastSyncTime(0);
+      localStorage.setItem(K_AUTOLOGS, "[]");
+      localStorage.setItem(K_LAST_SYNC, "0");
+    }
+  };
+
+  const deleteAutoBlock = (block) => {
+    setAutoLogs((prev) => {
+      // Filter out raw logs that fall into the block's start and end times
+      const filtered = prev.filter(log => log.timestamp < block.startTimestamp || log.timestamp > block.endTimestamp || log.app !== block.app);
+      localStorage.setItem(K_AUTOLOGS, JSON.stringify(filtered));
+      return filtered;
+    });
+  };
 
   const persist = (next) => {
     setTasks(next);
@@ -645,9 +772,89 @@ export default function FlowTrack() {
     return "Good evening";
   };
 
-  /* ── base splits ── */
+  /* ── base task splits ── */
   const today = tasks.filter((t) => t.status !== "completed");
   const done = tasks.filter((t) => t.status === "completed");
+
+  /* ── auto-tracker logs aggregation into clean blocks ── */
+  const aggregatedBlocks = useMemo(() => {
+    if (autoLogs.length === 0) return [];
+    
+    // Sort logs by timestamp ascending
+    const sorted = [...autoLogs].sort((a, b) => a.timestamp - b.timestamp);
+    const blocks = [];
+    let currentBlock = null;
+
+    sorted.forEach((log) => {
+      if (!currentBlock) {
+        currentBlock = {
+          id: uid(),
+          app: log.app,
+          category: log.category,
+          title: log.title,
+          startTimestamp: log.timestamp,
+          endTimestamp: log.timestamp,
+          duration: 10, // 10 second polls
+          date: new Date(log.timestamp * 1000).toISOString().slice(0, 10),
+        };
+        return;
+      }
+
+      const gap = log.timestamp - currentBlock.endTimestamp;
+      const sameApp = log.app === currentBlock.app;
+      const sameCategory = log.category === currentBlock.category;
+
+      // Allow a gap of up to 120 seconds (2 minutes) to merge logs
+      if (sameApp && sameCategory && gap <= 120) {
+        currentBlock.endTimestamp = log.timestamp;
+        currentBlock.duration += 10;
+      } else {
+        blocks.push(currentBlock);
+        currentBlock = {
+          id: uid(),
+          app: log.app,
+          category: log.category,
+          title: log.title,
+          startTimestamp: log.timestamp,
+          endTimestamp: log.timestamp,
+          duration: 10,
+          date: new Date(log.timestamp * 1000).toISOString().slice(0, 10),
+        };
+      }
+    });
+
+    if (currentBlock) {
+      blocks.push(currentBlock);
+    }
+
+    // Sort by start timestamp descending (newest first)
+    return blocks.sort((a, b) => b.startTimestamp - a.startTimestamp);
+  }, [autoLogs]);
+
+  // Click-to-log autofill
+  const handleLogBlock = (block) => {
+    const formatTime = (ts) => {
+      const date = new Date(ts * 1000);
+      const h = String(date.getHours()).padStart(2, "0");
+      const m = String(date.getMinutes()).padStart(2, "0");
+      return `${h}:${m}`;
+    };
+
+    setAdding(true);
+    setView("today");
+    
+    // Guess short title
+    let shortTitle = block.title.split(" - ").slice(-1)[0] || block.app;
+    if (shortTitle.length > 50) shortTitle = block.app;
+
+    setPrefillData({
+      title: `${block.category}: ${shortTitle}`,
+      start: formatTime(block.startTimestamp),
+      end: formatTime(block.endTimestamp + 10),
+      priority: "medium",
+      tags: TAGS.includes(block.category) ? [block.category] : [],
+    });
+  };
 
   /* ── analytics calculations filtered by range ── */
   const rangeLimitDate = useMemo(() => {
@@ -847,7 +1054,7 @@ export default function FlowTrack() {
           <input ref={impRef} type="file" accept="application/json" hidden
             onChange={(e) => e.target.files[0] && importJSON(e.target.files[0])} />
 
-          {/* user profile profile display card */}
+          {/* user profile display card */}
           <div style={{
             background: "rgba(255,255,255,0.02)",
             border: `1px solid ${C.border}`,
@@ -955,7 +1162,7 @@ export default function FlowTrack() {
 
             <div style={{ display: "grid", gap: 12 }}>
               {adding
-                ? <NewTask onAdd={(t) => { persist([...tasks, t]); setAdding(false); }} onCancel={() => setAdding(false)} />
+                ? <NewTask prefill={prefillData} onAdd={(t) => { persist([...tasks, t]); setAdding(false); setPrefillData(null); }} onCancel={() => { setAdding(false); setPrefillData(null); }} />
                 : <button onClick={() => setAdding(true)} style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
                     background: "rgba(255,255,255,0.01)", border: `1px dashed ${C.border}`, color: C.dim,
@@ -1045,136 +1252,291 @@ export default function FlowTrack() {
         {/* ── Upgraded insightful dashboard view ── */}
         {view === "dashboard" && (
           <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 14 }}>
               <div>
                 <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: "-.02em", color: C.txt }}>Space Analytics</h1>
                 <p style={{ fontSize: 12, color: C.dim, margin: "4px 0 0" }}>Interactive stats for <strong>{username}</strong></p>
               </div>
 
-              {/* Range Selector */}
-              <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
-                {[
-                  ["7d", "7 Days"],
-                  ["30d", "30 Days"],
-                  ["all", "All Time"]
-                ].map(([k, label]) => (
-                  <button key={k} onClick={() => setRange(k)} style={{
-                    background: range === k ? "rgba(255,255,255,0.06)" : "transparent",
-                    border: "none",
-                    borderRadius: 7,
-                    color: range === k ? C.txt : C.dim,
-                    fontSize: 11.5,
-                    fontWeight: 600,
-                    padding: "5px 12px",
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    transition: "all 0.15s ease",
+              {/* Subtabs and Range selector */}
+              <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                {/* View switcher */}
+                <div style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
+                  <button onClick={() => setDashTab("overview")} style={{
+                    background: dashTab === "overview" ? "rgba(255,255,255,0.06)" : "transparent",
+                    border: "none", borderRadius: 7, color: dashTab === "overview" ? C.txt : C.dim,
+                    fontSize: 11.5, fontWeight: 600, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit",
+                  }}>Overview</button>
+                  <button onClick={() => setDashTab("auto")} style={{
+                    background: dashTab === "auto" ? "rgba(255,255,255,0.06)" : "transparent",
+                    border: "none", borderRadius: 7, color: dashTab === "auto" ? C.txt : C.dim,
+                    fontSize: 11.5, fontWeight: 600, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit",
+                    display: "flex", alignItems: "center", gap: 4,
                   }}>
-                    {label}
+                    Auto Activity 
+                    {trackerStatus === "active" && <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.green }} />}
                   </button>
-                ))}
+                </div>
+
+                {dashTab === "overview" && (
+                  <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
+                    {[
+                      ["7d", "7 Days"],
+                      ["30d", "30 Days"],
+                      ["all", "All Time"]
+                    ].map(([k, label]) => (
+                      <button key={k} onClick={() => setRange(k)} style={{
+                        background: range === k ? "rgba(255,255,255,0.06)" : "transparent",
+                        border: "none", borderRadius: 7, color: range === k ? C.txt : C.dim,
+                        fontSize: 11.5, fontWeight: 600, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit",
+                        transition: "all 0.15s ease",
+                      }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Grid metrics */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 20 }}>
-              {[
-                ["Tasks tracked", stats.total, C.txt, "total"],
-                ["Completed", stats.completed, C.green, "completed"],
-                ["Completion rate", `${stats.total ? Math.round((stats.completed / stats.total) * 100) : 0}%`, C.amber, "rate"],
-                ["Focused time", fmtDur(stats.mins), C.blue, "time"],
-              ].map(([l, v, c, k]) => (
-                <div key={l} style={{
-                  background: C.panel,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 14,
-                  padding: 18,
-                  backdropFilter: "blur(12px)",
-                }}>
-                  <div style={{ fontSize: 24, fontWeight: 700, color: c, fontVariantNumeric: "tabular-nums" }}>{v}</div>
-                  <div style={{ fontSize: 11.5, color: C.dim, marginTop: 4, fontWeight: 500 }}>{l}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Charts section */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14, marginBottom: 20 }}>
-              
-              {/* Line chart trend */}
-              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)", display: "flex", flexDirection: "column" }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Completion Trend</div>
-                <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
-                  <SVGLinesChart data={trendData} color={C.amber} label="Tasks completed" />
-                </div>
-              </div>
-
-              {/* Priority Donut chart */}
-              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)", display: "flex", flexDirection: "column" }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Priority Split</div>
-                <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
-                  <SVGPieChart data={priorityData} />
-                </div>
-              </div>
-            </div>
-
-            {/* Tag / Category Distribution */}
-            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, marginBottom: 20, backdropFilter: "blur(12px)" }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Time Distribution by Tags</div>
-              {tagMins.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: C.dim, padding: "10px 0" }}>Create tasks with tags and input time details to generate analytical charts.</div>
-              ) : (
-                <div style={{ display: "grid", gap: 12 }}>
-                  {tagMins.map(([tag, m]) => (
-                    <div key={tag}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.dim, marginBottom: 5 }}>
-                        <span style={{ fontWeight: 500, color: C.txt }}>{tag}</span>
-                        <span style={{ fontVariantNumeric: "tabular-nums", color: C.dim }}>{fmtDur(m)}</span>
-                      </div>
-                      <Bar pct={(m / tagMins[0][1]) * 100} color={C.blue} />
+            {/* TAB 1: Analytics Overview */}
+            {dashTab === "overview" && (
+              <>
+                {/* Grid metrics */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 20 }}>
+                  {[
+                    ["Tasks tracked", stats.total, C.txt, "total"],
+                    ["Completed", stats.completed, C.green, "completed"],
+                    ["Completion rate", `${stats.total ? Math.round((stats.completed / stats.total) * 100) : 0}%`, C.amber, "rate"],
+                    ["Focused time", fmtDur(stats.mins), C.blue, "time"],
+                  ].map(([l, v, c]) => (
+                    <div key={l} style={{
+                      background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, backdropFilter: "blur(12px)",
+                    }}>
+                      <div style={{ fontSize: 24, fontWeight: 700, color: c, fontVariantNumeric: "tabular-nums" }}>{v}</div>
+                      <div style={{ fontSize: 11.5, color: C.dim, marginTop: 4, fontWeight: 500 }}>{l}</div>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
 
-            {/* Activity heatmap */}
-            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: C.txt }}>Activity Grid</div>
-                <div style={{ display: "flex", gap: 8, fontSize: 9.5, color: C.dim, alignItems: "center" }}>
-                  <span>Less</span>
-                  <div style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(255,255,255,0.04)" }} />
-                  <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber + "33" }} />
-                  <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber + "aa" }} />
-                  <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber }} />
-                  <span>More</span>
+                {/* Charts */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14, marginBottom: 20 }}>
+                  <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)", display: "flex", flexDirection: "column" }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Completion Trend</div>
+                    <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
+                      <SVGLinesChart data={trendData} color={C.amber} label="Tasks completed" />
+                    </div>
+                  </div>
+
+                  <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)", display: "flex", flexDirection: "column" }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Priority Split</div>
+                    <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
+                      <SVGPieChart data={priorityData} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tag Time Distribution */}
+                <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, marginBottom: 20, backdropFilter: "blur(12px)" }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 16, color: C.txt }}>Time Distribution by Tags</div>
+                  {tagMins.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: C.dim, padding: "10px 0" }}>Create tasks with tags and input time details to generate analytical charts.</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 12 }}>
+                      {tagMins.map(([tag, m]) => (
+                        <div key={tag}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.dim, marginBottom: 5 }}>
+                            <span style={{ fontWeight: 500, color: C.txt }}>{tag}</span>
+                            <span style={{ fontVariantNumeric: "tabular-nums", color: C.dim }}>{fmtDur(m)}</span>
+                          </div>
+                          <Bar pct={(m / tagMins[0][1]) * 100} color={C.blue} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Activity heatmap */}
+                <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, backdropFilter: "blur(12px)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: C.txt }}>Activity Grid</div>
+                    <div style={{ display: "flex", gap: 8, fontSize: 9.5, color: C.dim, alignItems: "center" }}>
+                      <span>Less</span>
+                      <div style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(255,255,255,0.04)" }} />
+                      <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber + "33" }} />
+                      <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber + "aa" }} />
+                      <div style={{ width: 10, height: 10, borderRadius: 2, background: C.amber }} />
+                      <span>More</span>
+                    </div>
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <div style={{ display: "flex", gap: 3, paddingBottom: 6 }}>
+                      {Array.from({ length: 84 }, (_, i) => {
+                        const d = new Date();
+                        d.setDate(d.getDate() - (83 - i));
+                        const iso = d.toISOString().slice(0, 10);
+                        const n = done.filter((t) => t.completedDate === iso).length;
+                        const bg = n === 0 ? "rgba(255,255,255,0.04)" : n === 1 ? C.amber + "33" : n <= 3 ? C.amber + "aa" : C.amber;
+                        return (
+                          <div key={i} title={`${iso}: ${n} tasks completed`} style={{
+                            width: 10, height: 10, borderRadius: 2, background: bg, flexShrink: 0,
+                            transition: "transform 0.15s ease",
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.25)"; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1.0)"; }}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.dim, marginTop: 6, padding: "0 2px" }}>
+                    <span>12 Weeks Ago</span>
+                    <span>Today</span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* TAB 2: Auto Desktop Activity */}
+            {dashTab === "auto" && (
+              <div style={{ display: "grid", gap: 20 }}>
+                {/* Connection Status Card */}
+                <div style={{
+                  background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: "18px 24px",
+                  display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 14,
+                  backdropFilter: "blur(12px)",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                    <div style={{
+                      width: 42, height: 42, borderRadius: 10, background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`,
+                      display: "grid", placeItems: "center", color: C.amber
+                    }}>
+                      <Monitor size={18} />
+                    </div>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{
+                          width: 8, height: 8, borderRadius: "50%",
+                          background: trackerStatus === "active" ? C.green : trackerStatus === "paused" ? C.amber : "#555",
+                          boxShadow: trackerStatus === "active" ? `0 0 10px ${C.green}` : trackerStatus === "paused" ? `0 0 10px ${C.amber}` : "none",
+                        }} />
+                        <span style={{ fontSize: 14.5, fontWeight: 700, color: C.txt }}>
+                          {trackerStatus === "active" ? "Auto-Tracking Active" : trackerStatus === "paused" ? "Auto-Tracking Paused" : "Auto-Tracker Offline"}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: 11.5, color: C.dim, margin: "3px 0 0" }}>
+                        {trackerStatus === "offline" 
+                          ? "Run python tracker.py on your machine to sync screen time logs." 
+                          : "Automatically capturing your active desktop windows in real-time."}
+                      </p>
+                    </div>
+                  </div>
+
+                  {trackerStatus !== "offline" && (
+                    <button onClick={toggleTracker} style={{
+                      background: trackerStatus === "active" ? "rgba(239, 68, 68, 0.08)" : "rgba(16, 185, 129, 0.08)",
+                      border: `1px solid ${trackerStatus === "active" ? "rgba(239, 68, 68, 0.2)" : "rgba(16, 185, 129, 0.2)"}`,
+                      color: trackerStatus === "active" ? C.red : C.green,
+                      borderRadius: 10, padding: "8px 16px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 8, fontFamily: "inherit",
+                      transition: "all 0.15s ease",
+                    }}>
+                      {trackerStatus === "active" ? (
+                        <>
+                          <Pause size={13} fill="currentColor" /> Pause Tracking
+                        </>
+                      ) : (
+                        <>
+                          <Play size={13} fill="currentColor" /> Resume Tracking
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {/* Aggregated Blocks Timeline */}
+                <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 20, backdropFilter: "blur(12px)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                    <h3 style={{ fontSize: 15, fontWeight: 700, color: C.txt, margin: 0 }}>Activity Timeline</h3>
+                    {autoLogs.length > 0 && (
+                      <button onClick={clearAutoLogs} style={{
+                        background: "transparent", border: "none", color: C.red, fontSize: 11.5, cursor: "pointer",
+                        fontWeight: 600, padding: 0, display: "flex", alignItems: "center", gap: 4
+                      }}>
+                        <Trash2 size={12} /> Clear Logs
+                      </button>
+                    )}
+                  </div>
+
+                  <div style={{ display: "grid", gap: 14 }}>
+                    {aggregatedBlocks.map((block) => {
+                      const startTimeStr = new Date(block.startTimestamp * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+                      const endTimeStr = new Date(block.endTimestamp * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+                      
+                      return (
+                        <div key={block.id} className="task-card" style={{
+                          background: "rgba(255,255,255,0.01)", border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px",
+                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14
+                        }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
+                            <div style={{
+                              width: 36, height: 36, borderRadius: "50%",
+                              background: block.category === "Coding" ? C.amber + "11" : block.category === "Research" ? C.blue + "11" : "rgba(255,255,255,0.02)",
+                              border: `1px solid ${block.category === "Coding" ? C.amber + "22" : block.category === "Research" ? C.blue + "22" : C.border}`,
+                              display: "grid", placeItems: "center", color: block.category === "Coding" ? C.amber : block.category === "Research" ? C.blue : C.dim,
+                              flexShrink: 0
+                            }}>
+                              <Clock size={16} />
+                            </div>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                                <span style={{ fontSize: 13.5, fontWeight: 700, color: C.txt }}>{block.category}</span>
+                                <span style={{ fontSize: 11, color: C.dim }}>{block.app}</span>
+                              </div>
+                              <div style={{ fontSize: 12, color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {block.title}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: 20, flexShrink: 0 }}>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: C.txt }}>{fmtSeconds(block.duration)}</div>
+                              <div style={{ fontSize: 10, color: C.dim2, marginTop: 2 }}>{startTimeStr} - {endTimeStr}</div>
+                            </div>
+
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button onClick={() => deleteAutoBlock(block)} style={{
+                                background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, borderRadius: 8, padding: 8,
+                                color: C.dim, cursor: "pointer", display: "flex", transition: "all 0.15s ease",
+                              }}>
+                                <Trash2 size={13} />
+                              </button>
+                              <button onClick={() => handleLogBlock(block)} style={{
+                                background: C.amber, border: "none", borderRadius: 8, padding: "8px 14px",
+                                color: "#000", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                                display: "flex", alignItems: "center", gap: 6, fontFamily: "inherit",
+                                transition: "all 0.15s ease",
+                              }}>
+                                <Plus size={12} strokeWidth={2.5} /> Log Block
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {aggregatedBlocks.length === 0 && (
+                      <div style={{ textAlign: "center", padding: "48px 20px", color: C.dim2, fontSize: 13 }}>
+                        {trackerStatus === "offline" 
+                          ? "Desktop Tracker is offline. Start the Python script to log window activity."
+                          : "No activity logged yet. Spend some time working on apps/websites!"}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-              <div style={{ overflowX: "auto" }}>
-                <div style={{ display: "flex", gap: 3, paddingBottom: 6 }}>
-                  {Array.from({ length: 84 }, (_, i) => {
-                    const d = new Date();
-                    d.setDate(d.getDate() - (83 - i));
-                    const iso = d.toISOString().slice(0, 10);
-                    const n = done.filter((t) => t.completedDate === iso).length;
-                    const bg = n === 0 ? "rgba(255,255,255,0.04)" : n === 1 ? C.amber + "33" : n <= 3 ? C.amber + "aa" : C.amber;
-                    return (
-                      <div key={i} title={`${iso}: ${n} tasks completed`} style={{
-                        width: 10, height: 10, borderRadius: 2, background: bg, flexShrink: 0,
-                        transition: "transform 0.15s ease",
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.25)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1.0)"; }}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.dim, marginTop: 6, padding: "0 2px" }}>
-                <span>12 Weeks Ago</span>
-                <span>Today</span>
-              </div>
-            </div>
+            )}
           </>
         )}
 

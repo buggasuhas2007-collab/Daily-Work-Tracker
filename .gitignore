@@ -21,4 +21,7 @@ dist-ssr
 *.ntvsca*
 *.njsproj
 *.sln
-*.sw?
+# Databases
+*.db
+desktop-tracker/autologs.db
+
